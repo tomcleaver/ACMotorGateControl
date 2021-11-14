@@ -3,6 +3,7 @@
 #include "Checks.h"
 #include "Enums.h"
 #include "EEPROM.h"
+#include "Timer.h"
 
 CChecks *StateCheck = nullptr;
 EMoveDirection LastMovementDirection{EMoveDirection::Idle};
@@ -33,8 +34,7 @@ int setTimeoutButtonPressTimer = -1;
 int setTimeoutButtonPressTimerMax = 100;
 
 // Blink the closed or open LED while closing or opening
-int blinkLEDTimerMax = 200;
-int blinkLEDTimerCount = 0;
+CTimer* BlinkLEDTimer = nullptr;
 
 //////////////// Master direction control ///////////////
 void SetOpening()
@@ -182,6 +182,10 @@ bool InitializeProgram()
   {
     Serial.println("Initializing Program");
     StateCheck = new CChecks();
+    BlinkLEDTimer = new CTimer();
+    BlinkLEDTimer->SetTimer(2);
+    BlinkLEDTimer->StartTimer();
+    BlinkLEDTimer->SetDebugTimer(false);
     float getEEPROM = 0.f;
     ActiveTimeout = static_cast<unsigned long>(EEPROM.get(EEPROMTimeoutMemLoc, getEEPROM));
 
@@ -234,14 +238,8 @@ void loop()
   if (StateCheck->GetMoveDirection() == EMoveDirection::Idle)
   {
     // blink the open or close position LED's while awaiting command
-    if (blinkLEDTimerCount < blinkLEDTimerMax)
+    if (BlinkLEDTimer->Update())
     {
-      blinkLEDTimerCount++;
-      Serial.println(blinkLEDTimerCount);
-    }
-    else
-    {
-      blinkLEDTimerCount = 0;
       if (StateCheck->GetGatePosition() == EPosition::Closed)
       {
         digitalWrite(openLEDPin, LOW);
@@ -260,6 +258,8 @@ void loop()
         digitalWrite(openLEDPin, LOW);
         digitalWrite(idleLEDPin, !digitalRead(idleLEDPin));
       }
+
+      BlinkLEDTimer->Reset();
     }
   } 
   /////////////////// Button presses for opening gate or setting limit setup mode

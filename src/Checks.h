@@ -46,4 +46,8 @@ private:
 
     // Our Movement Direction
     EMoveDirection MovementState = EMoveDirection::None;
+
+    // used to update debug info, forces only printing once per change rather than spamming the serial monitor
+    bool bDebugUpdatePositionSwitch = false;
+    EPosition LastPositionDebug = EPosition::None;
 };

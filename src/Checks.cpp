@@ -79,7 +79,7 @@ bool CChecks::CheckOpeningLimit()
 {
     bool bHasReachedLimit = false;
 
-    // While we're EMoveDirection::Closing check whether we've reached the closed limit switch
+    // While we're EMoveDirection::Opening check whether we've reached the Open limit switch
     if(MovementState == EMoveDirection::Opening)
     {
         if(CheckOpenLimitSwitch())
@@ -102,16 +102,41 @@ void CChecks::CheckAndSetCurrentPosition()
     if(!bIsOpen && !bIsClosed)
     {
         GatePosition =  EPosition::Unknown;
-        //Serial.println("Gate position unknown!");
+       if(GatePosition != LastPositionDebug)
+        {
+            LastPositionDebug = GatePosition;
+            Serial.println("Gate position unknown!");
+        }
+        return;
     }
     else if(bIsOpen && !bIsClosed)
     {
-        GatePosition = EPosition::Open;
-        //Serial.println("Gate position open!");
+        GatePosition = EPosition::Open;      
+        if(GatePosition != LastPositionDebug)
+        {
+            LastPositionDebug = GatePosition;
+            Serial.println("Gate position open!");
+        }
+        return;
     }
     else if(!bIsOpen && bIsClosed)
     {
-        GatePosition =  EPosition::Closed;
-        //Serial.println("Gate position closed!");
+        GatePosition =  EPosition::Closed;       
+        if(GatePosition != LastPositionDebug)
+        {
+            LastPositionDebug = GatePosition;
+            Serial.println("Gate position closed!");
+        }
+        return;
+    }    
+    else if(bIsOpen && bIsClosed)
+    {
+        GatePosition =  EPosition::Unknown;       
+        if(GatePosition != LastPositionDebug)
+        {
+            LastPositionDebug = GatePosition;
+            Serial.println("Gate position unknown!");
+        }
+        return;
     }
 }

@@ -10,7 +10,7 @@
 
 #define relayControlOpenPin 11 // Pin that controls the SSR, gate will open when HIGH (pulled LOW);
 
-#define relayControlClosePin 12 // Pin that controls the SSR, gate will close when HIGH (pulled LOW);
+#define relayControlClosePin 13 // Pin that controls the SSR, gate will close when HIGH (pulled LOW);
 
 #define reedSwitchClosedPin 10 // Pin that when high indicates the closed position has been reached
 

@@ -1,8 +1,8 @@
 #include "Timer.h"
 
-CTimer::CTimer()
+CTimer::CTimer(String _TimerName)
 {
-
+    TimerName = _TimerName;
 };
 
 void CTimer::SetTimer(float Seconds)
@@ -28,33 +28,34 @@ void CTimer::Resume()
 }
 
 void CTimer::Reset()
-{ 
+{
     bIsPaused = false;
+    ElapsedTimeSeconds = 0;
+    bHasCompleted = false;
     StartTimer();
-    Update();
 }
 
 bool CTimer::Update()
-{ 
-    if(!bIsPaused)
+{
+
+    if (!bHasCompleted)
     {
-        ElapsedTimeSeconds = (millis() - StartTime) / 1000;
+        if (!bIsPaused)
+        {
+            ElapsedTimeSeconds = (millis() - StartTime) / 1000;
+        }
+
+        if (bDebugTimer)
+        {
+            Serial.print(TimerName);
+            Serial.print(" - Time Elapsed = ");
+            Serial.println(ElapsedTimeSeconds);
+        }
+
+        bHasCompleted = ElapsedTimeSeconds > RunTime;
     }
 
-    if(bDebugTimer)
-    {
-        Serial.print("Time Elapsed = ");
-        Serial.println(ElapsedTimeSeconds);
-    }
-
-    if(ElapsedTimeSeconds < RunTime)
-    {
-        return false;
-    }
-    else
-    {
-        return true;
-    }
+    return bHasCompleted;
 }
 
 void CTimer::SetDebugTimer(bool NewDebug)

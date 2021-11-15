@@ -5,7 +5,7 @@ class CTimer
 {
 public:
 
-    CTimer();
+    CTimer(String _TimerName);
 
     // Sets time to complete, does not start timer
     void SetTimer(float Seconds);
@@ -31,4 +31,6 @@ private:
     unsigned long ElapsedTimeSeconds{};
     bool bIsPaused = false;
     bool bDebugTimer = false;
+    String TimerName{""};
+    bool bHasCompleted = false;
 };

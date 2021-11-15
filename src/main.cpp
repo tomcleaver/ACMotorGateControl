@@ -16,8 +16,8 @@ unsigned long EEPROMTimeoutMemLoc = 0;
 // value stored in EEProm which updates when a full open or close cycle completes
 // ensures the motor doesn't stay on in the case of a failure with one of the
 // limit switches... prevents motor overheat
-unsigned long ActiveTimeout = 0;
-unsigned long TimeoutTimerStartTime = 0;
+unsigned long ActiveTimeout = 10;
+
 bool bHasRecordedStartTime = false;
 // save any attempts here, if we complete a full cycle we update ActiveTimeout
 unsigned long TemporaryTimeoutRecording = 0;
@@ -25,21 +25,21 @@ unsigned long TemporaryTimeoutRecording = 0;
 // will then become false if a cycle completes (in which case we update) or fails (in which case we disregard)
 bool bIsRecordingNewTimeout = false;
 
-// this stops the motor after it reaches ActiveTimeout
-int TimeoutCounter = 0;
-
 // if button pressed 2 times before timer max, set the active timeout recorder if only pressed once, open/close gate
 int setTimeoutButtonPressCounter = 0;
 int setTimeoutButtonPressTimer = -1;
 int setTimeoutButtonPressTimerMax = 100;
 
 // Blink the closed or open LED while closing or opening
-CTimer* BlinkLEDTimer = nullptr;
+CTimer *BlinkLEDTimer = nullptr;
+CTimer *AcknowledgeTimer = nullptr;
+CTimer *TimeoutTimer = nullptr;
+CTimer *ProcessingTimer = nullptr;
 
 //////////////// Master direction control ///////////////
 void SetOpening()
 {
-  TimeoutCounter = 0;
+  TimeoutTimer->Reset();
   Serial.println("Opening State Set");
   StateCheck->SetMovementState(EMoveDirection::Opening);
   LastMovementDirection = EMoveDirection::Opening;
@@ -52,7 +52,7 @@ void SetOpening()
 
 void SetClosing()
 {
-  TimeoutCounter = 0;
+  TimeoutTimer->Reset();
   Serial.println("Closing State Set");
   StateCheck->SetMovementState(EMoveDirection::Closing);
   LastMovementDirection = EMoveDirection::Closing;
@@ -65,10 +65,9 @@ void SetClosing()
 
 void SetIdle()
 {
-  TimeoutCounter = 0;
   Serial.println("Idle State Set");
   StateCheck->SetMovementState(EMoveDirection::Idle);
-
+  CommandState = ECommandState::Ready;
   digitalWrite(openLEDPin, LOW);
   digitalWrite(closeLEDPin, LOW);
   digitalWrite(idleLEDPin, HIGH);
@@ -157,20 +156,18 @@ void CommandAction()
 
 void RecordNewActiveTimeout()
 {
-  Serial.print("TemporaryTimeoutRecording is ");
-  Serial.println(TemporaryTimeoutRecording + (TemporaryTimeoutRecording / 10));
-  Serial.print(" and active is ");
-  Serial.print(ActiveTimeout);
   unsigned long CompletedRecordingTimeMillis = millis();
 
   unsigned long NewSoftwareLimitTime = CompletedRecordingTimeMillis - TemporaryTimeoutRecording;
 
-    // Add ten percent to make sure we don't cut off too early
-    ActiveTimeout = abs(NewSoftwareLimitTime + (NewSoftwareLimitTime / 10));
+  // Add ten percent to make sure we don't cut off too early
+  ActiveTimeout = abs(NewSoftwareLimitTime + (NewSoftwareLimitTime / 10)) / 1000;
 
-    TemporaryTimeoutRecording = 0;
-    EEPROM.put(EEPROMTimeoutMemLoc, static_cast<unsigned long>(ActiveTimeout));
-    Serial.println("Saving new value");
+  TemporaryTimeoutRecording = 0;
+  EEPROM.put(EEPROMTimeoutMemLoc, static_cast<float>(ActiveTimeout));
+
+  Serial.print("Saving new timeout = ");
+  Serial.println(static_cast<float>(ActiveTimeout));
 
   bHasRecordedStartTime = false;
   bWantsNewTimeoutRecording = false;
@@ -182,12 +179,29 @@ bool InitializeProgram()
   {
     Serial.println("Initializing Program");
     StateCheck = new CChecks();
-    BlinkLEDTimer = new CTimer();
-    BlinkLEDTimer->SetTimer(2);
+
+    BlinkLEDTimer = new CTimer("BlinkTimer");
+    BlinkLEDTimer->SetTimer(.5);
     BlinkLEDTimer->StartTimer();
-    BlinkLEDTimer->SetDebugTimer(false);
-    float getEEPROM = 0.f;
-    ActiveTimeout = static_cast<unsigned long>(EEPROM.get(EEPROMTimeoutMemLoc, getEEPROM));
+
+    TimeoutTimer = new CTimer("TimeoutTimer");
+    float getEEPROM = EEPROM.get(EEPROMTimeoutMemLoc, getEEPROM);
+    TimeoutTimer->SetTimer(getEEPROM);
+    ActiveTimeout = getEEPROM;
+    Serial.print("Timeout = ");
+    Serial.print(getEEPROM);
+    Serial.println(" seconds");
+
+    TimeoutTimer->SetDebugTimer(true);
+
+    AcknowledgeTimer = new CTimer("AcknowledgeTimer");
+    AcknowledgeTimer->SetTimer(.5);
+    ProcessingTimer = new CTimer("ProcessingTimer");
+    AcknowledgeTimer->SetTimer(2);
+
+    //BlinkLEDTimer->SetDebugTimer(true);
+    //AcknowledgeTimer->SetDebugTimer(true);
+    //ProcessingTimer->SetDebugTimer(true);
 
     digitalWrite(openLEDPin, HIGH);
     digitalWrite(closeLEDPin, HIGH);
@@ -229,8 +243,7 @@ void setup()
 }
 
 void loop()
-{ 
-  
+{
 
   // Set the gate position every frame, used to process movement directions and what to do if we're not at a limit switch
   StateCheck->CheckAndSetCurrentPosition();
@@ -240,6 +253,8 @@ void loop()
     // blink the open or close position LED's while awaiting command
     if (BlinkLEDTimer->Update())
     {
+      BlinkLEDTimer->Reset();
+
       if (StateCheck->GetGatePosition() == EPosition::Closed)
       {
         digitalWrite(openLEDPin, LOW);
@@ -251,17 +266,15 @@ void loop()
         digitalWrite(closeLEDPin, LOW);
         digitalWrite(idleLEDPin, LOW);
         digitalWrite(openLEDPin, !digitalRead(openLEDPin));
-      }   
+      }
       else if (StateCheck->GetGatePosition() == EPosition::Unknown)
       {
         digitalWrite(closeLEDPin, LOW);
         digitalWrite(openLEDPin, LOW);
         digitalWrite(idleLEDPin, !digitalRead(idleLEDPin));
       }
-
-      BlinkLEDTimer->Reset();
     }
-  } 
+  }
   /////////////////// Button presses for opening gate or setting limit setup mode
   bool setLimitButtonState = digitalRead(setSoftwareLimitSwitch);
 
@@ -349,16 +362,19 @@ void loop()
   // If our command state from the last loop was acknowledged, process the command once.
   if (CommandState == ECommandState::Acknowledged)
   {
-    CommandAction();
-    CommandState = ECommandState::Processing;
-    Serial.println(" Command Acknowledged!");
-    //if (bTesting)
-    delay(1000);
+    if (AcknowledgeTimer->Update())
+    {
+      CommandAction();
+      CommandState = ECommandState::Processing;
+      Serial.println(" Command Acknowledged!");
+      AcknowledgeTimer->Reset();
+    }
   }
 
   // Query our command signal state
   if ((StateCheck->ProcessControlSignal() && CommandState == ECommandState::Ready) || commandSignal == true)
   {
+    AcknowledgeTimer->StartTimer();
     CommandState = ECommandState::Acknowledged;
     commandSignal = false;
   }
@@ -370,8 +386,7 @@ void loop()
     Serial.println("Process Interrupted! Set IDLE");
     bIsRecordingNewTimeout = false;
     TemporaryTimeoutRecording = 0;
-    if (bTesting)
-      delay(2000);
+    delay(2000);
     CommandState = ECommandState::Ready;
   }
 
@@ -382,8 +397,8 @@ void loop()
     // Run the timeout while processing
     if (!bIsRecordingNewTimeout || !bWantsNewTimeoutRecording)
     {
-      if(millis() - TimeoutTimerStartTime > ActiveTimeout)
-      {    
+      if (TimeoutTimer->Update())
+      {
         if (StateCheck->GetMoveDirection() == EMoveDirection::Opening)
         {
           Serial.println("Opening Timed Out");
@@ -392,8 +407,9 @@ void loop()
         {
           Serial.println("Closing Timed Out");
         }
+
         SetIdle();
-        TimeoutCounter = 0;
+
         return;
       }
     }
@@ -405,14 +421,17 @@ void loop()
 
       // Runs if we're setting a new timeout
       if (bIsRecordingNewTimeout)
-      {  
-        if(!bHasRecordedStartTime)
+      {
+        if (!bHasRecordedStartTime)
         {
           bHasRecordedStartTime = true;
-          TemporaryTimeoutRecording = millis();  //get the current "time" (actually the number of milliseconds since the program started)
+          TemporaryTimeoutRecording = millis(); //get the current "time" (actually the number of milliseconds since the program started)
           Serial.print("Start Time = ");
           Serial.println(TemporaryTimeoutRecording);
         }
+
+        Serial.print("Setting new timeout - elapsed time(seconds) = ");
+        Serial.println((millis() - TemporaryTimeoutRecording) / 1000);
       }
 
       if (StateCheck->GetGatePosition() == EPosition::Open)
@@ -429,19 +448,19 @@ void loop()
         }
 
         SetIdle();
-        CommandState = ECommandState::Ready;
         delay(1000);
+        CommandState = ECommandState::Ready;
         return;
       }
       break;
 
     case EMoveDirection::Closing:
       if (bIsRecordingNewTimeout)
-      {   
-        if(!bHasRecordedStartTime)
+      {
+        if (!bHasRecordedStartTime)
         {
           bHasRecordedStartTime = true;
-          TemporaryTimeoutRecording = millis();  //get the current "time" (actually the number of milliseconds since the program started)
+          TemporaryTimeoutRecording = millis(); //get the current "time" (actually the number of milliseconds since the program started)
           Serial.print("Start Time = ");
           Serial.println(TemporaryTimeoutRecording);
         }

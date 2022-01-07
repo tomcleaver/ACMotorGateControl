@@ -12,50 +12,54 @@ void CTimer::SetTimer(float Seconds)
 
 void CTimer::StartTimer()
 {
+    TimerState = ETimerState::Running;
     StartTime = millis();
 }
 
 void CTimer::Pause()
 {
-    bIsPaused = true;
+    TimerState = ETimerState::Paused;
 }
 
 void CTimer::Resume()
 {
-    bIsPaused = false;
+    TimerState = ETimerState::Running;
     StartTime = millis() + ElapsedTimeSeconds;
     Update();
 }
 
 void CTimer::Reset()
 {
-    bIsPaused = false;
+    TimerState = ETimerState::None;
     ElapsedTimeSeconds = 0;
-    bHasCompleted = false;
-    StartTimer();
 }
 
-bool CTimer::Update()
+void CTimer::Update()
 {
-
-    if (!bHasCompleted)
+    if (TimerState == ETimerState::Running)
     {
-        if (!bIsPaused)
+        // If the timer has not reached the set time, update the elapsed time
+        if (!EvaluateRuntime())
         {
             ElapsedTimeSeconds = (millis() - StartTime) / 1000;
-        }
 
-        if (bDebugTimer)
+            if (bDebugTimer)
+            {
+                Serial.print(TimerName);
+                Serial.print(" - Time Elapsed = ");
+                Serial.println(ElapsedTimeSeconds);
+            }
+        }
+        else
         {
-            Serial.print(TimerName);
-            Serial.print(" - Time Elapsed = ");
-            Serial.println(ElapsedTimeSeconds);
+            TimerState = ETimerState::Complete;
         }
-
-        bHasCompleted = ElapsedTimeSeconds > RunTime;
     }
+}
 
-    return bHasCompleted;
+ETimerState CTimer::GetTimerState()
+{
+    return TimerState;
 }
 
 void CTimer::SetDebugTimer(bool NewDebug)

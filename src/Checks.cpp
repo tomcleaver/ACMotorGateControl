@@ -41,7 +41,7 @@ bool CChecks::CheckCommandSignalSwitch()
 
 bool CChecks::ProcessControlSignal()
 {
-    // if we have already received a command signal, don't allow new command until we've gone low first
+   /* // if we have already received a command signal, don't allow new command until we've gone low first
     if(CheckCommandSignalSwitch() && !CommandSignalState)
     {
         // set true to establish we're processing a command signal
@@ -54,7 +54,10 @@ bool CChecks::ProcessControlSignal()
         CommandSignalState = false;
     }
 
-    return CommandSignalState;
+    return CommandSignalState;*/
+
+    // return the state of the input pin, true means the radio has been triggered, a timer needs to disallow additional checks in main so we don't do this multiple times
+    return CheckCommandSignalSwitch();
 }
 
 bool CChecks::CheckClosingLimit()

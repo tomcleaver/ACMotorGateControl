@@ -32,14 +32,22 @@ int setTimeoutButtonPressTimerMax = 100;
 
 // Blink the closed or open LED while closing or opening
 CTimer *BlinkLEDTimer = nullptr;
-CTimer *AcknowledgeTimer = nullptr;
 CTimer *TimeoutTimer = nullptr;
-CTimer *ProcessingTimer = nullptr;
+
+// Timer to disallow triggering a command after the radio module goes high, as it has an on time of around one second we
+// must block triggering function on more than one frame per button press
+CTimer *InputCooldownTimer = nullptr;
 
 //////////////// Master direction control ///////////////
 void SetOpening()
 {
   TimeoutTimer->Reset();
+  TimeoutTimer->StartTimer();
+
+  // Allows gate to run, is set to ready when Idle is triggered by a button press during processing
+  // or when the gate reaches a limit or timeout is triggered
+  CommandState = ECommandState::Processing;
+
   Serial.println("Opening State Set");
   StateCheck->SetMovementState(EMoveDirection::Opening);
   LastMovementDirection = EMoveDirection::Opening;
@@ -53,6 +61,12 @@ void SetOpening()
 void SetClosing()
 {
   TimeoutTimer->Reset();
+  TimeoutTimer->StartTimer();
+
+  // Allows gate to run, is set to ready when Idle is triggered by a button press during processing
+  // or when the gate reaches a limit or timeout is triggered
+  CommandState = ECommandState::Processing;
+
   Serial.println("Closing State Set");
   StateCheck->SetMovementState(EMoveDirection::Closing);
   LastMovementDirection = EMoveDirection::Closing;
@@ -65,6 +79,7 @@ void SetClosing()
 
 void SetIdle()
 {
+  TimeoutTimer->Reset();
   Serial.println("Idle State Set");
   StateCheck->SetMovementState(EMoveDirection::Idle);
   CommandState = ECommandState::Ready;
@@ -116,25 +131,10 @@ void CommandAction()
 
       // In all cases, if the gate is stopped and the position is unknown, open
       // the gate, this is for maximum safety
-      SetOpening();
-      /*
-    // if we don't know our position, we check first our last known direction and go opposite to that
-    // this gives us the opposite movement if we stop and issue a new command
-      switch (LastMovementDirection)
-      {
-      case EMoveDirection::Opening:
-        SetOpening();
-        break;
+      // Note - set closing, somehow the positions got reversed - TODO FIX THIS
+      //SetOpening();
+      SetClosing();
 
-      case EMoveDirection::Closing:
-        SetOpening();
-        break;
-
-      default:
-        SetOpening();
-        break;
-      }
-*/
       break;
 
     default:
@@ -160,14 +160,22 @@ void RecordNewActiveTimeout()
 
   unsigned long NewSoftwareLimitTime = CompletedRecordingTimeMillis - TemporaryTimeoutRecording;
 
-  // Add ten percent to make sure we don't cut off too early
-  ActiveTimeout = abs(NewSoftwareLimitTime + (NewSoftwareLimitTime / 10)) / 1000;
+  // Only save larger value to prevent short stops in operation
+  if ((NewSoftwareLimitTime+ (NewSoftwareLimitTime / 10) > ActiveTimeout)
+  {
+    // Add ten percent to make sure we don't cut off too early
+    ActiveTimeout = abs(NewSoftwareLimitTime + (NewSoftwareLimitTime / 10)) / 1000;
 
-  TemporaryTimeoutRecording = 0;
-  EEPROM.put(EEPROMTimeoutMemLoc, static_cast<float>(ActiveTimeout));
+    TemporaryTimeoutRecording = 0;
+    EEPROM.put(EEPROMTimeoutMemLoc, static_cast<float>(ActiveTimeout));
 
-  Serial.print("Saving new timeout = ");
-  Serial.println(static_cast<float>(ActiveTimeout));
+    Serial.print("Saving new timeout = ");
+    Serial.println(static_cast<float>(ActiveTimeout));
+  }
+  else
+  {
+    Serial.print("New Timeout Shorter than Existing, discarding new timeout value...");
+  }
 
   bHasRecordedStartTime = false;
   bWantsNewTimeoutRecording = false;
@@ -192,16 +200,9 @@ bool InitializeProgram()
     Serial.print(getEEPROM);
     Serial.println(" seconds");
 
-    TimeoutTimer->SetDebugTimer(true);
-
-    AcknowledgeTimer = new CTimer("AcknowledgeTimer");
-    AcknowledgeTimer->SetTimer(.5);
-    ProcessingTimer = new CTimer("ProcessingTimer");
-    AcknowledgeTimer->SetTimer(2);
-
-    //BlinkLEDTimer->SetDebugTimer(true);
-    //AcknowledgeTimer->SetDebugTimer(true);
-    //ProcessingTimer->SetDebugTimer(true);
+    TimeoutTimer->SetDebugTimer(false);
+    InputCooldownTimer = new CTimer("CooldownTimer");
+    InputCooldownTimer->SetTimer(1.5);
 
     digitalWrite(openLEDPin, HIGH);
     digitalWrite(closeLEDPin, HIGH);
@@ -242,16 +243,25 @@ void setup()
   }
 }
 
+void UpdateTimers()
+{
+  TimeoutTimer->Update();
+  InputCooldownTimer->Update();
+  BlinkLEDTimer->Update();
+}
+
 void loop()
 {
+  UpdateTimers();
 
   // Set the gate position every frame, used to process movement directions and what to do if we're not at a limit switch
   StateCheck->CheckAndSetCurrentPosition();
 
+  // Blink LED if Idle and at a limit
   if (StateCheck->GetMoveDirection() == EMoveDirection::Idle)
   {
     // blink the open or close position LED's while awaiting command
-    if (BlinkLEDTimer->Update())
+    if (BlinkLEDTimer->GetTimerState() == ETimerState::Complete)
     {
       BlinkLEDTimer->Reset();
 
@@ -275,6 +285,7 @@ void loop()
       }
     }
   }
+
   /////////////////// Button presses for opening gate or setting limit setup mode
   bool setLimitButtonState = digitalRead(setSoftwareLimitSwitch);
 
@@ -298,6 +309,7 @@ void loop()
   bool commandSignal = false;
   bool setLimits = false;
 
+  // Manual button presses
   if (setTimeoutButtonPressTimer != -1)
   {
     if (setTimeoutButtonPressTimer < setTimeoutButtonPressTimerMax)
@@ -316,15 +328,6 @@ void loop()
     }
     else
     {
-
-      /* if (setTimeoutButtonPressTimer == 3)
-      {
-        float memReset = 500;
-        EEPROM.put(EEPROMTimeoutMemLoc, memReset);
-        setTimeoutButtonPressCounter = 0;
-        Serial.println("EEPROM reset!");
-      }
-      else */
       if (setTimeoutButtonPressCounter == 2)
       {
         setLimits = true;
@@ -340,7 +343,6 @@ void loop()
       setTimeoutButtonPressTimer = -1;
     }
   }
-
   if (setLimits && !bWantsNewTimeoutRecording)
   {
     Serial.println("setSoftwareLimitSwitch Pressed!");
@@ -359,45 +361,52 @@ void loop()
     digitalWrite(closeLEDPin, LOW);
   }
 
-  // If our command state from the last loop was acknowledged, process the command once.
-  if (CommandState == ECommandState::Acknowledged)
+  //Manual button press occurred, skip the pin check and run the command actions
+  if (commandSignal)
   {
-    if (AcknowledgeTimer->Update())
-    {
-      CommandAction();
-      CommandState = ECommandState::Processing;
-      Serial.println(" Command Acknowledged!");
-      AcknowledgeTimer->Reset();
-    }
-  }
-
-  // Query our command signal state
-  if ((StateCheck->ProcessControlSignal() && CommandState == ECommandState::Ready) || commandSignal == true)
-  {
-    AcknowledgeTimer->StartTimer();
-    CommandState = ECommandState::Acknowledged;
+    Serial.println("Manual Override Button Pressed");
     commandSignal = false;
+    goto ManualCommand;
   }
 
-  // to stop the gate while operating
-  else if (StateCheck->ProcessControlSignal() && CommandState == ECommandState::Processing)
+  // Check if we have a high signal on the radio input
+  if (StateCheck->ProcessControlSignal())
   {
-    SetIdle();
-    Serial.println("Process Interrupted! Set IDLE");
-    bIsRecordingNewTimeout = false;
-    TemporaryTimeoutRecording = 0;
-    delay(2000);
-    CommandState = ECommandState::Ready;
+
+  ManualCommand:
+    // block reading any additional high inputs until the timer runs out, this allows time for the remote relay to switch off
+    switch (InputCooldownTimer->GetTimerState())
+    {
+    // A new timer or a reset timer has a None ETimerState, therefor we can start the timer and start an action
+    case ETimerState::None:
+
+      // Set Input timer state to Running
+      InputCooldownTimer->StartTimer();
+      CommandAction();
+      break;
+
+    case ETimerState::Running:
+      // Do nothing, we cannot trigger this more than once per button press
+      break;
+    case ETimerState::Complete:
+      // Setting back to None state will now allow a new command action to be triggered by a button press
+      InputCooldownTimer->Reset();
+      break;
+
+    default:
+      break;
+    }
   }
 
   //////////////// The gate is actioning the last command here ////////////////////////
 
-  if (CommandState == ECommandState::Processing)
+  // Motor protection timeout is handled here - shuts off motor if the timer reaches completion
+  // Set Idle returns the timer state to None, allowing a new start timer to occur with each command received
+  if (TimeoutTimer->GetTimerState() == ETimerState::Complete)
   {
     // Run the timeout while processing
     if (!bIsRecordingNewTimeout || !bWantsNewTimeoutRecording)
     {
-      if (TimeoutTimer->Update())
       {
         if (StateCheck->GetMoveDirection() == EMoveDirection::Opening)
         {
@@ -409,11 +418,14 @@ void loop()
         }
 
         SetIdle();
-
         return;
       }
     }
+  }
 
+  // if the gate is currently operating
+  if (CommandState == ECommandState::Processing)
+  {
     // check to see if we've reached the open position
     switch (StateCheck->GetMoveDirection())
     {
@@ -448,8 +460,6 @@ void loop()
         }
 
         SetIdle();
-        delay(1000);
-        CommandState = ECommandState::Ready;
         return;
       }
       break;
@@ -479,8 +489,6 @@ void loop()
         }
 
         SetIdle();
-        delay(1000);
-        CommandState = ECommandState::Ready;
         return;
       }
       break;
@@ -488,17 +496,11 @@ void loop()
     case EMoveDirection::Idle:
       // If we're already idle, stay idle.
       Serial.println("Already Idle, gate must have been stopped manually or timed out.");
-      //SetIdle();
-      CommandState = ECommandState::Ready;
       break;
 
     default:
-
       Serial.println("Error: Default case. Set IDLE");
       SetIdle();
-      CommandState = ECommandState::Ready;
-      if (bTesting)
-        delay(2000);
     }
   }
 }

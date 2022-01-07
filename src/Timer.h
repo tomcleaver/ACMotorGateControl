@@ -1,9 +1,18 @@
 #pragma once
 #include <Arduino.h>
 
+enum class ETimerState
+{
+    None,
+    Paused,
+    Running,
+    Complete,
+};
+
 class CTimer
 {
 public:
+
 
     CTimer(String _TimerName);
 
@@ -16,10 +25,12 @@ public:
 
     void Resume();
 
-    // Return true if timer has gone over the limit, if true is returned the timer should be reset or destroyed
-    bool Update();
+    // Updates the TimerState enum to reflect its current state
+    void Update();
 
     void Reset();
+    
+    ETimerState GetTimerState();
 
     void SetDebugTimer(bool NewDebug);
 
@@ -29,8 +40,9 @@ private:
     unsigned long RunTime{};
     unsigned long StartTime{};
     unsigned long ElapsedTimeSeconds{};
-    bool bIsPaused = false;
     bool bDebugTimer = false;
     String TimerName{""};
-    bool bHasCompleted = false;
+    ETimerState TimerState = ETimerState::None;
+
+    bool EvaluateRuntime() {return ElapsedTimeSeconds > RunTime; };
 };
